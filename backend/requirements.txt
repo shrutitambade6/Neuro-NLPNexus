@@ -1,0 +1,44 @@
+# Core API
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+
+# Database
+sqlalchemy==2.0.35
+
+# NLP — kept minimal on purpose. Every lab in this project computes its
+# own result from scratch in app/algorithms rather than leaning on a
+# heavy pretrained model, which keeps installs fast and every output
+# explainable. nltk was used once, transiently, to cross-verify the
+# Porter stemmer against a reference implementation during development;
+# it isn't a runtime dependency and isn't installed here.
+# deep-translator wraps Google Translate's free public web endpoint (no
+# API key) — used by the Real-World NLP Machine Translation demo. Needs
+# outbound internet access from wherever the backend runs.
+deep-translator==1.11.4
+
+# spaCy + its small English model — the ONE deliberate, disclosed
+# exception to "every lab computes its own result from scratch" above.
+# The Named Entity Recognition lab offers a second, opt-in "spaCy
+# (pretrained model)" engine alongside its own default rule-based/
+# gazetteer NER (app/algorithms/ner.py), specifically so a student can
+# compare a hand-built system against a real trained model on the same
+# sentence. en_core_web_sm is spaCy's smallest English model (~13MB,
+# CPU-only, no GPU needed) chosen to keep this installable in the same
+# environment as everything else here. After `pip install -r
+# requirements.txt`, also run:
+#   python -m spacy download en_core_web_sm
+# (a one-time ~13MB download; the spaCy engine returns a clear 503 with
+# instructions if this step is skipped, rather than crashing the app).
+spacy==3.8.16
+
+# NER Lab Code Playground -- soft, best-effort memory monitoring for
+# the sandboxed subprocess that runs student code (see
+# app/services/ner_playground_service.py). Polled via psutil rather
+# than a hard OS rlimit because this project also runs on Windows,
+# which has no POSIX rlimit equivalent.
+psutil==7.0.0
+
+# Dev / testing
+pytest==8.3.3
+httpx==0.27.2

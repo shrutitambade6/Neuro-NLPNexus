@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+*.db
+
+# Node
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+
+# Env
+.env
+
+# Vite leftover timestamp files (generated during dev server restarts)
+*.timestamp-*.mjs

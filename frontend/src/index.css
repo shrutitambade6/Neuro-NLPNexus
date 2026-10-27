@@ -1,0 +1,346 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   NeuroNLP Nexus — dual theme token system
+   ==========================================================================
+   Every color below is expressed as "R G B" (space-separated, no commas —
+   Tailwind's rgb(var(--x) / <alpha-value>) pattern requires that format) so
+   Tailwind's opacity modifiers (bg-nexus-accent/10, etc.) keep working.
+
+   :root holds the DARK palette (the app's original, unchanged default —
+   this is not a redesign of dark mode, only an extraction of its literal
+   values into variables). :root[data-theme="light"] overrides every token
+   with a deliberately-designed light palette — never a simple inversion of
+   the dark numbers. Which block applies is controlled by the `data-theme`
+   attribute on <html>, set before first paint by the inline script in
+   index.html (see there for why) and kept in sync afterwards by
+   src/store/themeStore.ts.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Depth scale: page -> panel -> card -> elevated card */
+  --nexus-bg: 5 8 22;
+  --nexus-surface: 14 25 51;
+  --nexus-surfaceAlt: 10 18 40;
+  --nexus-card: 16 26 48;
+  --nexus-surfaceHover: 20 32 58;
+
+  --nexus-border: 35 43 66;
+
+  /* Text: primary / secondary / tertiary (placeholders, timestamps) */
+  --nexus-text: 255 255 255;
+  --nexus-muted: 174 185 208;
+  --nexus-faint: 130 142 168;
+
+  /* Brand + semantic */
+  --nexus-accent: 22 135 255;
+  --nexus-accentDim: 51 66 122;
+  --nexus-purple: 167 139 250;
+  --nexus-data: 66 217 255;
+  --nexus-good: 52 211 153;
+  --nexus-warn: 251 191 36;
+  --nexus-bad: 248 113 113;
+  --nexus-yellow: 255 216 77;
+  --nexus-gold: 255 183 3;
+  /* Small supporting accent — added for NEXI/illustrations (the Cartoon &
+     Motion System): human interaction / creativity, used sparingly, never
+     as a base surface or primary interactive color. */
+  --nexus-coral: 233 139 170;
+
+  /* Study Planner categorical set (Day/Week/Month screens) — 6 hues
+     mapped 1:1 onto the dataviz skill's validated reference palette
+     (slots: violet, blue, aqua, orange, yellow, magenta), in that fixed
+     order, so category identity never relies on an unvalidated color.
+     A 7th planner "slate" category deliberately has no entry here — it
+     reuses --nexus-muted as the neutral "uncategorized" fallback,
+     since a single neutral bucket never competes for identity against
+     a real category. */
+  --nexus-plannerLavender: 144 133 233;
+  --nexus-plannerSky: 57 135 229;
+  --nexus-plannerMint: 25 158 112;
+  --nexus-plannerCoral: 217 89 38;
+  --nexus-plannerButter: 201 133 0;
+  --nexus-plannerRose: 213 81 129;
+
+  /* POS-tag family colors (POS Tagging Lab) — a validated 3-hue categorical
+     set (dataviz skill: color-formula.md), not hand-picked. 11 individual
+     tags is past the ~8-hue safe cap for reliable color-only identity, so
+     tags are grouped by grammatical family (nominal / predicate-modifier /
+     function-word) instead of getting 11 separate hues; punctuation uses
+     the existing neutral --nexus-muted rather than a categorical hue at
+     all. Every badge/cell that uses these ALSO always shows the exact tag
+     text (NOUN, VERB, DET, ...) — color reinforces the family, it never
+     carries identity alone. Validated with scripts/validate_palette.js
+     from the dataviz skill against this app's real dark surface
+     (rgb(5 8 22)) with --pairs all (any two families can sit adjacent in a
+     real sentence): worst all-pairs CVD ΔE 9.4, normal-vision ΔE 20.9.
+     posFunction is below 3:1 contrast in light mode by design (dataviz's
+     documented "relief" case) — mitigated by the mandatory text label. */
+  --nexus-posNominal: 57 135 229; /* NOUN, PROPN, PRON */
+  --nexus-posPredicate: 217 89 38; /* VERB, ADJ, ADV */
+  --nexus-posFunction: 25 158 112; /* DET, ADP, CONJ, NUM */
+
+  /* Fixed — intentionally identical in both themes. For text that sits on
+     a bright solid/gradient chip and must always read as dark ink. */
+  --nexus-ink: 5 8 22;
+
+  /* The accent->data brand gradient (the "Analyze language" CTA) is bright
+     in dark mode (needs dark text) but the same two tokens are deliberately
+     deepened for light-mode contrast elsewhere, making that gradient
+     medium-dark instead (needs light text) — so this one flips per theme
+     rather than being fixed like --nexus-ink. */
+  --nexus-onGradient: 5 8 22;
+
+  /* Glow intensity for shadow-glow and a couple of drop-shadow accents —
+     the dark-mode "futuristic lab" glow. Dimmed in light mode below. */
+  --nexus-glowAlpha: 0.35;
+
+  /* Super Admin Portal milestone — a fixed "security" accent, the SAME
+     numeric value in both the dark and light blocks below (unlike every
+     other --nexus-* token, which is redesigned per theme). The Super
+     Admin Portal's identity (headers, nav rail, badges) is meant to read
+     as "dark navy / security" regardless of the viewer's light/dark
+     preference, while its ordinary chrome (page background, cards, body
+     text) still uses the normal nexus-bg/surface/text tokens and so still
+     gets real light/dark support. A slate/steel blue — distinct from the
+     primary accent blue, the NLP purple, and the DL gold — on purpose. */
+  --nexus-admin: 148 163 184;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Same fixed security accent as :root above — intentionally NOT
+     redesigned for light mode, see the comment there. */
+  --nexus-admin: 148 163 184;
+
+  /* True white, not an off-white/blue-tinted page — the base surface,
+     panels, and cards are ALL pure white; the only thing that separates
+     them is a hairline border and (on hover) a barely-there gray tint.
+     Contrast comes from vivid, fully-saturated accent/semantic colors
+     popping against that white, not from a soft pastel background. Not an
+     inversion of dark mode's numbers — every value below was chosen for
+     its own contrast/mood in a light UI. */
+  --nexus-bg: 255 255 255;
+  --nexus-surface: 255 255 255;
+  --nexus-surfaceAlt: 244 246 250;
+  --nexus-card: 255 255 255;
+  --nexus-surfaceHover: 243 245 249;
+
+  --nexus-border: 220 224 232;
+
+  /* Strong, near-black text — maximum readable contrast on white, not a
+     soft gray. */
+  --nexus-text: 15 23 42;
+  --nexus-muted: 71 85 105;
+  --nexus-faint: 100 116 139;
+
+  /* Vivid, fully-saturated brand + semantic colors — chosen to pop against
+     pure white, not muted pastel versions of the dark palette.
+     Revised 2026-10-07: the user felt the purple/accent/gold domain trio
+     read as "wrong together" in light mode. Ran this app's own dataviz-
+     skill validator (scripts/validate_palette.js) on the trio against a
+     white surface and got concrete numbers, not just a vibe: the old
+     purple (#7C3AED, violet-600) and the accent blue (#2563EB) sit only
+     ~41 deg apart in hue at near-identical lightness/chroma, so a full-
+     color viewer's own normal-vision delta (12.4) fell BELOW this app's
+     15.0 "tell them apart" floor, and they were almost totally fused
+     for deuteranopia (delta 0.4 of 100). Separately, the old gold
+     (#B48204) sat noticeably darker/duller (muddy-olive, OKLCH L~0.36)
+     than purple/accent's brighter jewel tones (L~0.55-0.58), which is
+     the "two jewels + one drab color" effect that made the trio feel
+     unbalanced even where the hues didn't collide. Fix: purple moved to
+     purple-600 (#9333EA, hue 271 vs blue's 221 — wider hue gap, normal-
+     vision delta now 16.2, clears the floor) and gold moved to a
+     classic "goldenrod" (#B8860B) at a closer lightness/chroma band to
+     its two partners, still >=3:1 on white. Purple-vs-accent for
+     deuteranopia specifically is still below the CVD floor (delta 1.3)
+     — hue alone can't fully separate blue and violet for that vision
+     type without one of them leaving its own color family, so this
+     follows the same mitigation this codebase already uses for
+     --nexus-posFunction above: every place these domain colors appear,
+     the domain name is always shown as visible text too, never color
+     alone. Dark mode is untouched — this was a light-theme-only
+     complaint, and the user didn't ask for a dark-mode change. For the
+     record: re-running the same validator against the dark palette's own
+     purple/accent (#A78BFA / #1687FF on the dark surface) shows the same
+     normal-vision delta sitting at 14.7 — just under this same 15.0 floor
+     too — so this is a pre-existing, not-yet-fixed near-miss in dark mode
+     as well, left alone here since it wasn't part of what was asked. */
+  --nexus-accent: 37 99 235;
+  --nexus-accentDim: 59 130 246;
+  --nexus-purple: 147 51 234;
+  --nexus-data: 8 145 178;
+  /* good/warn/bad are deliberately deeper/more saturated than their dark-mode
+     counterparts — the dark palette's mint/amber/coral read fine on near-
+     black but drop well below AA contrast on white. */
+  --nexus-good: 22 163 74;
+  --nexus-warn: 217 119 6;
+  --nexus-bad: 220 38 38;
+  --nexus-yellow: 234 179 8;
+  --nexus-gold: 184 134 11;
+  /* Deepened for contrast on white, same reasoning as good/warn/bad above. */
+  --nexus-coral: 190 64 110;
+
+  /* Study Planner categorical set, light-mode steps — same validated
+     hue order as :root above, re-stepped for the white surface. */
+  --nexus-plannerLavender: 74 58 167;
+  --nexus-plannerSky: 42 120 214;
+  --nexus-plannerMint: 27 175 122;
+  --nexus-plannerCoral: 235 104 52;
+  --nexus-plannerButter: 237 161 0;
+  --nexus-plannerRose: 232 123 164;
+
+  /* POS-tag family colors, light-mode steps — same 3-hue validated set as
+     dark mode (see :root above for the full rationale), re-stepped for the
+     white surface. posFunction is intentionally sub-3:1 here (documented,
+     "relief" mitigated by always-visible text labels). */
+  --nexus-posNominal: 42 120 214;
+  --nexus-posPredicate: 235 104 52;
+  --nexus-posFunction: 27 175 122;
+
+  --nexus-glowAlpha: 0.12;
+  --nexus-onGradient: 255 255 255;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: rgb(var(--nexus-bg));
+  color: rgb(var(--nexus-text));
+}
+
+/* Headings use the display face project-wide without touching every
+   component — Space Grotesk for structure, Inter for body copy. */
+@layer base {
+  h1, h2, h3, h4, h5, h6 {
+    font-family: theme("fontFamily.display");
+  }
+}
+
+/* Smooth, quick theme transition (spec: ~200-400ms, never a full-page
+   flash) — scoped to color-bearing properties only, so it never fights
+   layout/transform transitions already defined per-component. */
+*, *::before, *::after {
+  transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease,
+    fill 200ms ease, stroke 200ms ease, box-shadow 200ms ease;
+}
+
+/* Scrollbars, themed to match the surrounding chrome instead of the
+   browser default (which stays jarringly dark-gray even in light mode). */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--nexus-accentDim)) rgb(var(--nexus-surfaceAlt));
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgb(var(--nexus-surfaceAlt));
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--nexus-accentDim));
+  border-radius: 999px;
+  border: 2px solid rgb(var(--nexus-surfaceAlt));
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--nexus-accent));
+}
+
+/* Respect reduced-motion preference across the app — this also covers the
+   theme-transition rule above, so a reduced-motion user gets an instant
+   theme swap instead of a 200ms fade. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Settings -> Accessibility -> "Reduce motion": a manual override of the
+   same rule above, for a student whose OS-level setting doesn't reflect
+   what they want here (see store/preferencesStore.ts / PreferencesEffects).
+   Framer Motion's own spring/tween animations (the drawer slide, the
+   Progress modal, NEXI, lab visualizations) are driven in JS, not CSS, so
+   this rule — like the OS media query above — covers CSS transitions and
+   @keyframes animations, which is most of the app's chrome and hover
+   effects; it's not a claim that every pixel-level JS animation freezes. */
+:root[data-reduce-motion="true"] *, :root[data-reduce-motion="true"] *::before, :root[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Settings -> Accessibility -> "Larger text": scales the root font-size,
+   which every rem-based Tailwind utility in this app inherits from —
+   genuinely resizes body copy, labels, and headings app-wide, not just
+   one component. */
+:root[data-text-size="large"] {
+  font-size: 112.5%;
+}
+
+/* Googly eyes (GooglyEyes.tsx) -- user spec, 2026-10-07. Fixed literal
+   colors (white/black/dark outline) by design, not nexus-* theme tokens:
+   the cartoon-eyes aesthetic is intentionally theme-independent and should
+   look identical in light and dark mode. Prefixed googly-* class names to
+   avoid any collision with existing app classes. */
+.googly-eyes-scene {
+  display: flex;
+  gap: 24px;
+  flex-shrink: 0;
+
+  /* Scalable via the --eye-scale CSS variable the component sets
+     (default 1 = the base ~100px-per-eye size below). */
+  transform: scale(var(--eye-scale, 1));
+  transform-origin: center;
+
+  /* transform: scale() shrinks how the pair LOOKS without shrinking the
+     space it RESERVES in the layout. These negative margins pull
+     surrounding content back in to close that gap. 224px / 100px are this
+     component's own unscaled footprint (two 100px eyes + one 24px gap =
+     224px wide, 100px tall) -- at --eye-scale: 1 both margins resolve to
+     0, so this is a no-op until the pair is actually scaled down. */
+  margin-inline: calc((224px * (var(--eye-scale, 1) - 1)) / 2);
+  margin-block: calc((100px * (var(--eye-scale, 1) - 1)) / 2);
+}
+
+.googly-eye {
+  display: block;
+  position: relative;
+  width: 100px;
+  height: 100px;
+  background: #fff;
+  border: 2px solid #111;
+  box-sizing: border-box;
+  border-radius: 50%;
+  /* Powers the blink below. */
+  transition: transform 0.12s ease;
+}
+
+/* The whole blink is this one class: a quick vertical squash. JS just
+   toggles it on for BLINK_DURATION_MS and back off. */
+.googly-eye.googly-eye--blink {
+  transform: scaleY(0.05);
+}
+
+.googly-pupil {
+  display: block;
+  position: absolute;
+  width: 36px;
+  height: 36px;
+  background: #000;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  /* JS only ever changes the two + Xpx / + Ypx offsets inside this
+     calc() -- the -50% half keeps the pupil centred in the eye. */
+  transform: translate(calc(-50% + 0px), calc(-50% + 0px));
+}

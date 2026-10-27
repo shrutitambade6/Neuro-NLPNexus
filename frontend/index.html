@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NeuroNLP Nexus — Interactive NLP & Deep Learning Lab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <!--
+      Applies the right theme BEFORE the stylesheet paints and before React
+      mounts, so there's no flash of the wrong theme on load. Mirrors the
+      same "stored choice, else dark" priority that src/store/themeStore.ts
+      uses afterwards, and reads/writes the exact same plain (non-JSON)
+      localStorage key, "neuronlp-theme", so the two never disagree.
+
+      2026-10-08 -- changed from "stored choice > OS preference > dark" to
+      "stored choice (incl. explicit System) > dark" per explicit user
+      report: opening the app in an InPrivate/incognito window (no stored
+      preference at all, a fresh profile) was showing light, because the
+      OS/browser's own prefers-color-scheme was being consulted for EVERY
+      no-stored-light/dark case, including one that had never made any
+      choice -- and some private-browsing contexts report/default that
+      media query to light regardless of the actual OS setting. The ask
+      was that EVERYONE should see dark on a brand-new visit, not
+      "whatever the browser's OS-preference media query happens to
+      report." A visitor who has genuinely never chosen anything now
+      always starts on dark. The one case that still legitimately consults
+      OS preference here is someone who explicitly picked "System" in the
+      header ThemeToggle before (a real, deliberate, persisted choice to
+      follow the OS) -- that still needs to match what
+      src/store/themeStore.ts's own resolve("system") will compute a
+      moment later, or this first-paint script and React would disagree
+      and cause the exact flash this script exists to prevent.
+    -->
+    <script>
+      (function () {
+        try {
+          var KEY = "neuronlp-theme";
+          var stored = localStorage.getItem(KEY);
+          var theme;
+          if (stored === "light" || stored === "dark") {
+            theme = stored;
+          } else if (stored === "system") {
+            var systemLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+            theme = systemLight ? "light" : "dark";
+          } else {
+            // No stored preference at all -- never made a choice yet.
+            // Default straight to dark; OS preference is not consulted.
+            theme = "dark";
+          }
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

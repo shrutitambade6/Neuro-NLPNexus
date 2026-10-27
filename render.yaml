@@ -1,0 +1,37 @@
+# Render Blueprint for NeuroNLP Nexus — one Web Service that builds the
+# React frontend, then serves it from the same FastAPI process that
+# serves /api (see backend/app/main.py's frontend-serving block). This
+# keeps everything same-origin, so no CORS or second static-site
+# service is needed for the deployed app.
+#
+# To use: push this repo to GitHub, then in the Render dashboard choose
+# "New +" -> "Blueprint" and point it at the repo. Render reads this
+# file automatically.
+services:
+  - type: web
+    name: neuronlp-nexus
+    env: python
+    plan: free
+    buildCommand: >-
+      cd frontend && npm ci && npm run build &&
+      cd ../backend && pip install -r requirements.txt &&
+      python -m spacy download en_core_web_sm
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Signs every login session and email-verification link. Render
+      # generates a real random value for this the first time it
+      # deploys — never a hardcoded/shared secret.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite:///./nlp_nexus.db
+      # No real SMTP credentials are configured here (this is a public
+      # demo deploy, not production), so registration would otherwise
+      # tell new users to "check your email" for a verification link
+      # that never arrives. Turning this off keeps new accounts usable
+      # immediately — matching this project's own honest
+      # email_status: "not_configured" fallback behavior either way.
+      - key: EMAIL_VERIFICATION_ENABLED
+        value: "false"
