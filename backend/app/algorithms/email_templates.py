@@ -27,7 +27,22 @@ def build_account_created_email(
     verification is enabled").
     """
     when = created_at.strftime("%B %d, %Y at %H:%M UTC")
-    subject = f"Welcome to {PLATFORM_NAME} — your account is ready"
+    # Production-Ready Email Verification milestone (2026-10-28). Subject
+    # and intro copy now distinguish "you must verify before you can log
+    # in" from "you're all set" -- verify_url's presence IS the gating
+    # signal (the caller, auth_service._send_account_created_email, only
+    # ever builds one when the account genuinely still needs to verify),
+    # so no separate flag is needed here.
+    pending_verification = verify_url is not None
+    subject = (
+        f"Verify your {PLATFORM_NAME} account" if pending_verification
+        else f"Welcome to {PLATFORM_NAME} — your account is ready"
+    )
+    intro_copy = (
+        f"Your {PLATFORM_NAME} account was created — verify your email below to activate it and log in."
+        if pending_verification
+        else f"Your {PLATFORM_NAME} account was created successfully."
+    )
 
     verify_section_html = ""
     verify_section_text = ""
@@ -45,8 +60,14 @@ def build_account_created_email(
                   font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
           Or paste this link into your browser:<br />{verify_url}
         </p>
+        <p style="font-size:12px;color:#8b8fa3;text-align:center;
+                  font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+          This link expires in 24 hours.
+        </p>
         """
-        verify_section_text = f"\nVerify your email to activate your account:\n{verify_url}\n"
+        verify_section_text = (
+            f"\nVerify your email to activate your account (this link expires in 24 hours):\n{verify_url}\n"
+        )
 
     html_body = f"""<!doctype html>
 <html>
@@ -71,7 +92,7 @@ def build_account_created_email(
                   Welcome, {username}! 🎉
                 </p>
                 <p style="margin:0 0 20px;font-size:14px;color:#4b5563;line-height:1.6;">
-                  Your {PLATFORM_NAME} account was created successfully.
+                  {intro_copy}
                 </p>
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
                        style="background:#f9fafb;border-radius:10px;padding:4px 0;margin-bottom:20px;">
@@ -115,7 +136,7 @@ def build_account_created_email(
 
     text_body = f"""Welcome to {PLATFORM_NAME}, {username}!
 
-Your account was created successfully.
+{intro_copy}
 
 Username: {username}
 Email: {email}

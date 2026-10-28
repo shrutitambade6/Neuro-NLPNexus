@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { AlertCircle, Check, Eye, EyeOff, Loader2, UserPlus, X } from "lucide-react";
+import { AlertCircle, Check, Eye, EyeOff, Loader2, Mail, UserPlus, X } from "lucide-react";
 
 import { useAuthStore } from "../store/authStore";
-import { checkUsernameAvailable } from "../services/api";
+import { checkUsernameAvailable, resendVerificationEmail } from "../services/api";
 import NexiMascot, { type NexiMood } from "../components/nexi/NexiMascot";
 import AccountCreatedToast from "../components/nexi/AccountCreatedToast";
 
@@ -45,7 +45,27 @@ const USERNAME_PATTERN = /^[A-Za-z0-9_]+$/;
 const COLLEGE_EMAIL_DOMAIN = "vit.edu.in";
 const COLLEGE_EMAIL_PATTERN = new RegExp(`^[^\\s@]+@${COLLEGE_EMAIL_DOMAIN.replace(/\./g, "\\.")}$`, "i");
 
+// Production-Ready Email Verification milestone (2026-10-28). Mirrors the
+// backend's GENERAL_EMAIL_PROVIDERS (schemas.auth.py) -- a General
+// student may register with a personal address from one of these instead
+// of the institutional domain. Teachers never see this choice; the
+// backend forces them onto COLLEGE_EMAIL_DOMAIN regardless either way.
+const GENERAL_EMAIL_DOMAIN = "gmail.com";
+const GENERAL_EMAIL_PATTERN = new RegExp(`^[^\\s@]+@${GENERAL_EMAIL_DOMAIN.replace(/\./g, "\\.")}$`, "i");
+
+// Masks an email's local part for privacy-conscious display on the
+// "check your inbox" screen (spec section 11) -- never shows the full
+// address back, just enough for the user to recognize it's theirs.
+function maskEmail(email: string): string {
+  const [local, domain] = email.split("@");
+  if (!local || !domain) return email;
+  const visible = local.slice(0, Math.min(2, local.length));
+  const hidden = "*".repeat(Math.max(local.length - visible.length, 3));
+  return `${visible}${hidden}@${domain}`;
+}
+
 type UsernameCheck = "idle" | "checking" | "available" | "taken" | "invalid";
+type StudentCategory = "vit" | "general";
 
 export default function Register() {
   const navigate = useNavigate();
@@ -63,10 +83,50 @@ export default function Register() {
   // what the post-signup toast says. Defaults to "student" (today's
   // behavior) so this is purely additive for anyone who ignores it.
   const [accountType, setAccountType] = useState<"student" | "teacher">("student");
+  // Production-Ready Email Verification milestone (2026-10-28). Only
+  // meaningful for students -- see validate_email_domain's own comment
+  // server-side. Reset to "vit" whenever accountType switches to
+  // "teacher" (see the account-type toggle's onClick below), purely for
+  // UI consistency; the backend enforces the real rule independently.
+  const [studentCategory, setStudentCategory] = useState<StudentCategory>("vit");
   const [toast, setToast] = useState<{ active: boolean; message: string }>({ active: false, message: "" });
+  // Production-Ready Email Verification milestone (2026-10-28). Set once
+  // register() resolves to "verify_pending" -- a brand-new account that
+  // was created but issued NO session, because it still has to verify
+  // its email. Replaces the form with the "check your inbox" screen
+  // below instead of ever navigating into the dashboard.
+  const [pendingVerification, setPendingVerification] = useState<{ active: boolean; email: string }>({
+    active: false,
+    email: "",
+  });
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [resendMessage, setResendMessage] = useState("");
   const strength = useMemo(() => passwordStrength(password), [password]);
   const confirmMismatch = confirmPassword.length > 0 && confirmPassword !== password;
-  const collegeEmailInvalid = collegeEmail.length > 0 && !COLLEGE_EMAIL_PATTERN.test(collegeEmail.trim());
+  // Production-Ready Email Verification milestone (2026-10-28). A
+  // teacher, or a "vit"-category student, is still required to use the
+  // institutional domain; a "general" student may use a personal Gmail
+  // address instead -- mirrors schemas.auth.RegisterRequest.
+  // validate_email_domain exactly, so the frontend never promises an
+  // address the backend will then reject.
+  const requiresCollegeDomain = accountType === "teacher" || studentCategory === "vit";
+  const activeEmailPattern = requiresCollegeDomain ? COLLEGE_EMAIL_PATTERN : GENERAL_EMAIL_PATTERN;
+  const emailLabel = requiresCollegeDomain ? "College Email" : "Personal Email (Gmail)";
+  const emailPlaceholder = `yourname@${requiresCollegeDomain ? COLLEGE_EMAIL_DOMAIN : GENERAL_EMAIL_DOMAIN}`;
+  const emailHint = requiresCollegeDomain
+    ? `Must be your college email, ending in @${COLLEGE_EMAIL_DOMAIN}`
+    : `Must be a personal email ending in @${GENERAL_EMAIL_DOMAIN}`;
+  const collegeEmailInvalid = collegeEmail.length > 0 && !activeEmailPattern.test(collegeEmail.trim());
+
+  // Fixes the cross-page error leak (Login.tsx <-> Register.tsx share one
+  // `error` field in the auth store, see authStore.ts): a failed login
+  // attempt's "Username not found." must never still be showing here if
+  // the visitor then navigates to this page without having submitted
+  // this form yet.
+  useEffect(() => {
+    clearError();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Real-time username availability (spec section 1) — debounced so every
   // keystroke doesn't fire a request; a request in flight is discarded if
@@ -107,17 +167,112 @@ export default function Register() {
     // that fires before React's re-render has disabled the button.
     if (password !== confirmPassword) return;
     if (usernameCheck === "taken") return;
-    if (!COLLEGE_EMAIL_PATTERN.test(collegeEmail.trim())) return;
+    if (!activeEmailPattern.test(collegeEmail.trim())) return;
     const timezone = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
-    const ok = await register(username, fullName, collegeEmail.trim(), password, confirmPassword, null, timezone, accountType);
-    if (ok) {
+    const trimmedEmail = collegeEmail.trim();
+    const result = await register(
+      username,
+      fullName,
+      trimmedEmail,
+      password,
+      confirmPassword,
+      null,
+      timezone,
+      accountType,
+      studentCategory
+    );
+    if (result === "authenticated") {
       const { user } = useAuthStore.getState();
       setToast({ active: true, message: successMessage(user?.teacher_request_pending ?? false) });
       // Give the toast a moment on screen before leaving the page it
       // appeared on — long enough to read, short enough not to feel stuck.
       setTimeout(() => navigate("/dashboard"), 1900);
+    } else if (result === "verify_pending") {
+      // Production-Ready Email Verification milestone (2026-10-28). No
+      // session was issued -- replace the form with the "check your
+      // inbox" screen rather than navigating anywhere. See spec section
+      // 11, item 4 ("Verification email sent") / item 10 ("Do not
+      // redirect users into the dashboard before their account has been
+      // properly verified").
+      setPendingVerification({ active: true, email: trimmedEmail });
     }
   };
+
+  const handleResend = async () => {
+    setResendState("sending");
+    setResendMessage("");
+    try {
+      const result = await resendVerificationEmail(pendingVerification.email);
+      setResendState(result.email_status === "rate_limited" || result.email_status === "disabled" ? "error" : "sent");
+      setResendMessage(result.message);
+    } catch {
+      setResendState("error");
+      setResendMessage("Couldn't reach the backend. Please try again in a moment.");
+    }
+  };
+
+  if (pendingVerification.active) {
+    // Production-Ready Email Verification milestone (2026-10-28). The
+    // account was created but is NOT logged in -- there is no session,
+    // and this page must never navigate into the dashboard from here.
+    // Matches spec section 11's required copy/shape for this state.
+    return (
+      <div className="max-w-sm mx-auto mt-12 space-y-6">
+        <div className="flex items-center gap-3">
+          <NexiMascot mood="success" size="md" />
+          <h1 className="text-2xl font-semibold">Almost there</h1>
+        </div>
+        <div className="rounded-2xl border border-nexus-border bg-nexus-surface p-5 space-y-4 text-sm">
+          <div className="flex items-start gap-3">
+            <Mail size={18} className="shrink-0 text-nexus-accent mt-0.5" />
+            <p className="text-nexus-text">
+              Your account is almost ready. We've sent a verification link to{" "}
+              <span className="font-medium">{maskEmail(pendingVerification.email)}</span>. Open the email and
+              verify your account before logging in.
+            </p>
+          </div>
+          <p className="text-xs text-nexus-muted">
+            The link expires in 24 hours. If it doesn't arrive in a few minutes, check your spam folder or
+            request a new one below.
+          </p>
+
+          {resendMessage && (
+            <div
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
+                resendState === "error"
+                  ? "border-nexus-bad/40 bg-nexus-bad/10 text-nexus-bad"
+                  : "border-nexus-good/40 bg-nexus-good/10 text-nexus-good"
+              }`}
+            >
+              {resendState === "error" ? (
+                <AlertCircle size={14} className="shrink-0" />
+              ) : (
+                <Check size={14} className="shrink-0" />
+              )}
+              {resendMessage}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleResend}
+            disabled={resendState === "sending"}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-nexus-border bg-nexus-bg px-4 py-2 text-sm font-medium text-nexus-text hover:text-nexus-accent disabled:opacity-50"
+          >
+            {resendState === "sending" ? <Loader2 size={14} className="animate-spin" /> : <Mail size={14} />}
+            Resend verification email
+          </button>
+
+          <Link
+            to="/login"
+            className="block text-center text-xs text-nexus-accent hover:text-nexus-data"
+          >
+            Already verified? Sign in
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-sm mx-auto mt-12 space-y-6">
@@ -139,7 +294,14 @@ export default function Register() {
               <button
                 key={type}
                 type="button"
-                onClick={() => setAccountType(type)}
+                onClick={() => {
+                  setAccountType(type);
+                  // Production-Ready Email Verification milestone
+                  // (2026-10-28) -- teachers never get a category choice;
+                  // the backend forces them onto the institutional domain
+                  // regardless, so keep the UI consistent with that.
+                  if (type === "teacher") setStudentCategory("vit");
+                }}
                 aria-pressed={accountType === type}
                 className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize transition-colors ${
                   accountType === type
@@ -158,6 +320,33 @@ export default function Register() {
             </p>
           )}
         </div>
+        {accountType === "student" && (
+          <div>
+            <label className="text-xs text-nexus-muted">Student category</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {(["vit", "general"] as const).map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => setStudentCategory(category)}
+                  aria-pressed={studentCategory === category}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                    studentCategory === category
+                      ? "border-nexus-accent bg-nexus-accent/15 text-nexus-accent"
+                      : "border-nexus-border bg-nexus-bg text-nexus-muted hover:text-nexus-text"
+                  }`}
+                >
+                  {category === "vit" ? "VIT Student" : "General Student"}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[10px] text-nexus-muted">
+              {studentCategory === "vit"
+                ? `Use your @${COLLEGE_EMAIL_DOMAIN} institutional email below.`
+                : `No VIT email? Use your personal @${GENERAL_EMAIL_DOMAIN} address below.`}
+            </p>
+          </div>
+        )}
         <div>
           <label className="text-xs text-nexus-muted">Full Name</label>
           <input
@@ -170,11 +359,11 @@ export default function Register() {
           />
         </div>
         <div>
-          <label className="text-xs text-nexus-muted">College Email</label>
+          <label className="text-xs text-nexus-muted">{emailLabel}</label>
           <input
             required
             type="email"
-            placeholder={`yourname@${COLLEGE_EMAIL_DOMAIN}`}
+            placeholder={emailPlaceholder}
             autoCapitalize="none"
             autoCorrect="off"
             value={collegeEmail}
@@ -186,9 +375,7 @@ export default function Register() {
                 : "border-nexus-border focus:ring-nexus-accent/50"
             }`}
           />
-          {collegeEmailInvalid && (
-            <p className="mt-1.5 text-[10px] text-nexus-bad">Must be your college email, ending in @{COLLEGE_EMAIL_DOMAIN}</p>
-          )}
+          {collegeEmailInvalid && <p className="mt-1.5 text-[10px] text-nexus-bad">{emailHint}</p>}
         </div>
         <div>
           <label className="text-xs text-nexus-muted">Username</label>

@@ -13,6 +13,7 @@ from app.algorithms.security_policy import (
     ACCOUNT_STATUS_LOGIN_MESSAGES,
     LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
     LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    RESEND_VERIFICATION_COOLDOWN_SECONDS,
     SUPER_ADMIN_SESSION_LIFETIME_SECONDS,
 )
 from app.models.orm_models import LoginActivity, User, UserSession
@@ -55,6 +56,19 @@ def _frontend_base_url() -> str:
 
 def _support_contact() -> str:
     return os.getenv("SUPPORT_EMAIL", "").strip() or "your platform administrator"
+
+
+class EmailNotVerifiedError(Exception):
+    """Raised by login_user when email verification is enabled and the
+    account hasn't completed it yet. Deliberately NOT a ValueError --
+    app.api.auth catches this separately so it can attach a structured
+    `code` to the HTTPException.detail (not just a plain string),
+    letting the frontend reliably show a "Resend verification email"
+    action without fragile string-matching against the message text."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
 
 
 def _issue_token(
@@ -155,16 +169,22 @@ def _send_account_created_email(user: User) -> str:
     prevent account creation from succeeding (the user's own spec: 'handle
     email delivery failures gracefully').
 
-    Username/Password Authentication milestone (2026-10-07) -- a normal
-    signup no longer collects an email at all, so this is skipped
-    entirely (no SMTP attempt, honest "no_email" status) for the common
-    case now. Still exercised for the rare account that does have an
-    email (e.g. created directly by a Super Admin)."""
+    Production-Ready Email Verification milestone (2026-10-28) --
+    `requires_verification` is computed fresh here (gating flag AND the
+    account genuinely still unverified), not just the raw gating flag, so
+    this stays correct for every caller: a brand-new gated-and-unverified
+    signup gets a real "Verify Email" link; resend_verification_email
+    only ever calls this once it has already confirmed the same thing
+    itself; and an already-verified or ungated account gets the plain
+    "your account is ready" copy with no verify link, same as before this
+    milestone. When a verify link IS sent, this also stamps
+    last_verification_sent_at (the resend-rate-limit clock) -- the
+    caller is responsible for committing that change."""
     if not user.email:
         return "no_email"
 
-    verification_enabled = _email_verification_enabled()
-    verify_url = _build_verify_url(user) if verification_enabled else None
+    requires_verification = _email_verification_enabled() and not user.is_verified
+    verify_url = _build_verify_url(user) if requires_verification else None
 
     subject, html_body, text_body = build_account_created_email(
         username=user.username,
@@ -173,6 +193,9 @@ def _send_account_created_email(user: User) -> str:
         verify_url=verify_url,
         support_contact=_support_contact(),
     )
+
+    if verify_url:
+        user.last_verification_sent_at = datetime.now(timezone.utc)
 
     try:
         result: EmailSendResult = send_email(user.email, subject, html_body, text_body)
@@ -201,17 +224,25 @@ def register_user(
     if db.query(User).filter(func.lower(User.email) == payload.college_email).first():
         raise ValueError("An account with that college email already exists.")
 
+    # Production-Ready Email Verification milestone (2026-10-28). Restores
+    # the real verification gate: register_user previously hardcoded
+    # is_verified=True unconditionally, with a stale comment claiming no
+    # email was collected at signup -- that stopped being true when the
+    # college-email requirement (2026-10-08) reintroduced a required
+    # email field without updating this logic. A brand-new account now
+    # starts unverified whenever EMAIL_VERIFICATION_ENABLED is on (the
+    # default), and must click the link in its welcome email before it
+    # can log in (see login_user's EmailNotVerifiedError check). When the
+    # flag is off -- e.g. this project's own public demo Render deploy,
+    # which has no real SMTP configured -- every new account is still
+    # activated immediately, unchanged from before this milestone.
+    requires_verification = _email_verification_enabled()
     user = User(
         username=payload.username,
         full_name=payload.full_name,
         email=payload.college_email,
         password_hash=hash_password(payload.password),
-        # No email collected at signup anymore, so there is nothing to
-        # verify — every new account is active immediately. The old
-        # "not _email_verification_enabled()" logic only ever mattered
-        # when email verification was the gate; that gate no longer
-        # applies to the normal signup path at all.
-        is_verified=True,
+        is_verified=not requires_verification,
         # Hardcoded, not read from the request — RegisterRequest has no
         # role field at all, so public sign-up can never create an admin
         # account. The one admin account only ever comes from
@@ -234,6 +265,17 @@ def register_user(
     db.refresh(user)
 
     email_status = _send_account_created_email(user)
+
+    if requires_verification and not user.is_verified:
+        # No session/token issued for an account that still needs to
+        # verify its email -- this is the master requirement this
+        # milestone restores: a new, unverified signup must never come
+        # back as an authenticated session, and must never be silently
+        # activated. db.commit() here persists last_verification_sent_at,
+        # which _send_account_created_email just set on `user` above.
+        db.commit()
+        return TokenResponse(access_token=None, user=UserOut.model_validate(user), email_status=email_status)
+
     return _issue_token(db, user, email_status=email_status, ip_address=ip_address, user_agent=user_agent)
 
 
@@ -348,6 +390,29 @@ def login_user(
         )
         raise ValueError(ACCOUNT_STATUS_LOGIN_MESSAGES.get(user.account_status, "This account is not active."))
 
+    # Production-Ready Email Verification milestone (2026-10-28). Checked
+    # only after credentials + account_status both pass (same "never leak
+    # anything about whether the password was right" reasoning as the
+    # account_type check below), and before it, since nothing else about
+    # this account matters until it's verified. Raises a distinct
+    # exception type (not ValueError) so app.api.auth can attach a
+    # structured `code` the frontend can act on (show a "Resend
+    # verification email" action) without string-matching the message.
+    if _email_verification_enabled() and not user.is_verified:
+        _log_login_attempt(
+            db,
+            user_id=user.id,
+            email_attempted=username,
+            success=False,
+            failure_reason="email_not_verified",
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        raise EmailNotVerifiedError(
+            "Please verify your email before logging in. Check your inbox for the verification link, "
+            "or request a new one below."
+        )
+
     # Student/Teacher self-serve signup follow-up (2026-10-07). Checked
     # only after credentials + account_status both pass, so a mismatch
     # here never leaks anything about whether an email/password pair was
@@ -459,7 +524,22 @@ def resend_verification_email(db: Session, email: str) -> ResendVerificationResp
             email_status="disabled", message="Email verification is currently disabled for this platform."
         )
 
+    # Production-Ready Email Verification milestone (2026-10-28). DB-backed
+    # cooldown, same "survives a restart, no in-memory bucket" reasoning as
+    # the login rate limiter above -- this endpoint takes no auth at all,
+    # so without it anyone who knows (or guesses) an account's email could
+    # make this platform repeatedly email that address.
+    if user.last_verification_sent_at:
+        elapsed = (datetime.now(timezone.utc) - user.last_verification_sent_at).total_seconds()
+        if elapsed < RESEND_VERIFICATION_COOLDOWN_SECONDS:
+            wait_seconds = max(1, int(RESEND_VERIFICATION_COOLDOWN_SECONDS - elapsed))
+            return ResendVerificationResponse(
+                email_status="rate_limited",
+                message=f"Please wait {wait_seconds} seconds before requesting another verification email.",
+            )
+
     status = _send_account_created_email(user)
+    db.commit()  # persists last_verification_sent_at, stamped by _send_account_created_email above
     message = (
         f"A new verification email was sent to {user.email}."
         if status == "sent"

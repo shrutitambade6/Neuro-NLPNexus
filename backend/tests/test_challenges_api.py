@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.challenges_service import seed_dl_challenges
-from tests.conftest import TestSessionLocal
+from tests.conftest import TestSessionLocal, verify_and_login
 
 client = TestClient(app)
 
@@ -16,8 +16,22 @@ def _seed():
 
 
 def _register_and_get_token(email: str) -> str:
-    r = client.post("/api/auth/register", json={"username": email.split("@")[0], "full_name": "Test User", "college_email": f"{email.split('@')[0]}@vit.edu.in", "password": "hunter22pass", "confirm_password": "hunter22pass"})
-    return r.json()["access_token"]
+    username = email.split("@")[0]
+    client.post(
+        "/api/auth/register",
+        json={
+            "username": username,
+            "full_name": "Test User",
+            "college_email": f"{username}@vit.edu.in",
+            "password": "hunter22pass",
+            "confirm_password": "hunter22pass",
+        },
+    )
+    # Production-Ready Email Verification milestone (2026-10-28) --
+    # registration no longer issues a token for an unverified account;
+    # this completes the real verify-email flow then logs in for a real
+    # one. See tests/conftest.py's verify_and_login for the full comment.
+    return verify_and_login(client, username)
 
 
 def test_list_challenges_endpoint_returns_seeded_set():

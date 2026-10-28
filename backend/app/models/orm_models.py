@@ -122,6 +122,11 @@ class User(Base):
     # reusing the same HS256 infra as login sessions. This column is the
     # only new persisted state, and it's what /auth/verify-email flips.
     is_verified = Column(Boolean, default=False, nullable=False)
+    # Production-Ready Email Verification milestone (2026-10-28). Purely
+    # an internal cooldown clock for resend_verification_email's rate
+    # limit — not shown in any API response. None until the first
+    # verification email is actually attempted.
+    last_verification_sent_at = Column(UTCDateTime, nullable=True)
     # Student/Teacher platform milestone. "student" for every account that
     # goes through /auth/register — that endpoint hardcodes role="student"
     # and has no role field in its request schema, so a public sign-up can

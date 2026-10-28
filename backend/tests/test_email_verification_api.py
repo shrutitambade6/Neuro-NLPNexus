@@ -43,12 +43,17 @@ def _create_user_with_email(username: str, email: str, is_verified: bool = False
         db.close()
 
 
-def test_register_is_verified_immediately_with_college_email_on_file():
-    # College Email milestone (2026-10-08) -- registration now REQUIRES and
-    # stores a real @vit.edu.in college email (see schemas.auth.RegisterRequest),
-    # superseding the "no email at all" behavior this file's docstring
-    # describes. The account is still verified immediately either way --
-    # there's no separate verification step to wait on.
+def test_register_requires_verification_with_college_email_on_file():
+    # Production-Ready Email Verification milestone (2026-10-28) --
+    # deliberate, intentional rewrite. This test previously asserted that
+    # registering with a real @vit.edu.in college email left the account
+    # verified and logged in immediately; that was exactly the bug this
+    # milestone fixes (register_user hardcoded is_verified=True with a
+    # stale comment claiming no email was collected).
+    # EMAIL_VERIFICATION_ENABLED defaults to "true" and nothing overrides
+    # it in this test run, so the real, restored behavior is: the
+    # account is created, unverified, and gets no session token until it
+    # verifies.
     response = client.post(
         "/api/auth/register",
         json={
@@ -65,14 +70,29 @@ def test_register_is_verified_immediately_with_college_email_on_file():
     # No SMTP is configured in this test environment, so the welcome-email
     # send is skipped and email_status comes back "not_configured" rather
     # than "sent" -- but registration itself is unaffected either way.
-    assert body["access_token"]
+    assert body["access_token"] is None
     assert body["email_status"] == "not_configured"
-    assert body["user"]["is_verified"] is True
+    assert body["user"]["is_verified"] is False
     assert body["user"]["email"] == "verifyme@vit.edu.in"
 
+    # And login is blocked until the real verify-email flow completes.
+    blocked = client.post("/api/auth/login", json={"username": "verifyme", "password": "hunter22pass"})
+    assert blocked.status_code == 401
+    assert blocked.json()["detail"]["code"] == "email_not_verified"
 
-def test_login_response_has_no_email_status():
-    client.post(
+    token = auth_service.create_access_token(
+        {"sub": str(body["user"]["id"]), "purpose": "verify_email"}, auth_service.JWT_SECRET, 3600
+    )
+    verify_resp = client.get("/api/auth/verify-email", params={"token": token})
+    assert verify_resp.status_code == 200
+
+    allowed = client.post("/api/auth/login", json={"username": "verifyme", "password": "hunter22pass"})
+    assert allowed.status_code == 200
+    assert allowed.json()["access_token"]
+
+
+def test_login_response_has_no_email_status_once_verified():
+    register = client.post(
         "/api/auth/register",
         json={
             "username": "loginonly",
@@ -82,6 +102,12 @@ def test_login_response_has_no_email_status():
             "confirm_password": "hunter22pass",
         },
     )
+    user_id = register.json()["user"]["id"]
+    token = auth_service.create_access_token(
+        {"sub": str(user_id), "purpose": "verify_email"}, auth_service.JWT_SECRET, 3600
+    )
+    client.get("/api/auth/verify-email", params={"token": token})
+
     response = client.post("/api/auth/login", json={"username": "loginonly", "password": "hunter22pass"})
     assert response.status_code == 200
     assert response.json()["email_status"] is None
@@ -156,3 +182,19 @@ def test_resend_verification_reports_not_configured_when_no_smtp(monkeypatch):
     response = client.post("/api/auth/resend-verification", json={"email": "resendme@example.com"})
     assert response.status_code == 200
     assert response.json()["email_status"] == "not_configured"
+
+
+def test_resend_verification_is_rate_limited_on_quick_repeat():
+    # Production-Ready Email Verification milestone (2026-10-28) -- the
+    # new resend cooldown (User.last_verification_sent_at +
+    # RESEND_VERIFICATION_COOLDOWN_SECONDS). No auth is required on this
+    # endpoint, so without a cooldown anyone who knows an account's email
+    # could make the platform repeatedly send to it.
+    _create_user_with_email("cooldownme", "cooldownme@example.com", is_verified=False)
+    first = client.post("/api/auth/resend-verification", json={"email": "cooldownme@example.com"})
+    assert first.status_code == 200
+    assert first.json()["email_status"] in ("not_configured", "sent")
+
+    second = client.post("/api/auth/resend-verification", json={"email": "cooldownme@example.com"})
+    assert second.status_code == 200
+    assert second.json()["email_status"] == "rate_limited"

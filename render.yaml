@@ -33,5 +33,52 @@ services:
       # that never arrives. Turning this off keeps new accounts usable
       # immediately — matching this project's own honest
       # email_status: "not_configured" fallback behavior either way.
+      #
+      # Production-Ready Email Verification milestone (2026-10-28): the
+      # real verification GATE in the code is restored and working (see
+      # auth_service.register_user/login_user) and tested locally end to
+      # end. This stays "false" here ONLY because no real SMTP
+      # credentials exist for this deploy yet -- flipping it to "true"
+      # without also filling in the SMTP_* values below would lock every
+      # new signup out with no way to ever receive the link. Once real
+      # SMTP_* credentials are set (see backend/.env.example and this
+      # project's deployment notes for exact setup steps), change this to
+      # "true" to turn the real gate on in production too.
       - key: EMAIL_VERIFICATION_ENABLED
         value: "false"
+      # Where the "Verify Email / Activate Account" link in the welcome
+      # email points — the frontend origin serving /verify-email (this
+      # same Web Service's own public URL, since frontend+backend are one
+      # service here), never localhost. Render fills RENDER_EXTERNAL_URL
+      # in automatically; set this to that same value once the service
+      # has its real onrender.com URL (or a custom domain), e.g.
+      # https://neuronlp-nexus.onrender.com -- sync: false so it's set
+      # once in the dashboard rather than committed here.
+      - key: FRONTEND_BASE_URL
+        sync: false
+      # Shown in the verification/welcome email's security note. Optional
+      # — falls back to a generic "your platform administrator" if unset.
+      - key: SUPPORT_EMAIL
+        sync: false
+      # Real SMTP credentials for actually sending verification/welcome
+      # emails. sync: false on every one of these means Render will ask
+      # for a value in the dashboard rather than storing it in this
+      # committed file — never put a real credential directly in
+      # render.yaml. Leave all of these unset to keep today's "not
+      # configured" demo behavior; see this project's deployment notes
+      # for exact provider setup steps (Gmail App Password, or any
+      # SMTP-compatible transactional provider).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_FROM_NAME
+        value: "NeuroNLP Nexus"
+      - key: SMTP_USE_TLS
+        value: "true"

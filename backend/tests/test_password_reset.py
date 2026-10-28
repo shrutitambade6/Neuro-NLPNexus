@@ -6,6 +6,11 @@ from app.models.orm_models import User
 from app.services.auth_service import JWT_SECRET
 from tests.conftest import TestSessionLocal
 
+# Production-Ready Email Verification milestone (2026-10-28) --
+# EMAIL_VERIFICATION_ENABLED defaults to "true" and nothing overrides it
+# in this test run, so a fresh /auth/register no longer returns a usable
+# session token on its own; see _verify_via_register_response below.
+
 client = TestClient(app)
 
 # Username/Password Authentication milestone (2026-10-07). /auth/register
@@ -133,7 +138,7 @@ def test_register_requires_and_stores_a_college_email():
 
 
 def test_login_sets_last_login():
-    client.post(
+    register = client.post(
         "/api/auth/register",
         json={
             "username": "lastlogin",
@@ -143,6 +148,11 @@ def test_login_sets_last_login():
             "confirm_password": "hunter22pass",
         },
     )
+    verify_token = create_access_token(
+        {"sub": str(register.json()["user"]["id"]), "purpose": "verify_email"}, JWT_SECRET, 3600
+    )
+    client.get("/api/auth/verify-email", params={"token": verify_token})
+
     r1 = client.post("/api/auth/login", json={"username": "lastlogin", "password": "hunter22pass"})
     token = r1.json()["access_token"]
     me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})

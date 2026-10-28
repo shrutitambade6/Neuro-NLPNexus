@@ -22,6 +22,7 @@ from app.schemas.auth import (
 )
 from app.services import birthday_service
 from app.services.auth_service import (
+    EmailNotVerifiedError,
     change_password,
     check_username_available,
     forgot_password,
@@ -77,6 +78,15 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         return login_user(
             db, payload, ip_address=_client_ip(request), user_agent=request.headers.get("user-agent")
         )
+    except EmailNotVerifiedError as exc:
+        # Production-Ready Email Verification milestone (2026-10-28). A
+        # structured detail (not just a plain string) so the frontend can
+        # reliably detect this one specific case -- via `code`, never by
+        # pattern-matching the human-readable `message` -- and show a
+        # "Resend verification email" action instead of a generic error.
+        raise HTTPException(
+            status_code=401, detail={"message": exc.message, "code": "email_not_verified"}
+        ) from exc
     except ValueError as exc:
         # Super Admin Portal milestone: a rate-limited or suspended/
         # deactivated login still has to look like "login failed" to the

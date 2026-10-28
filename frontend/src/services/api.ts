@@ -518,10 +518,36 @@ export interface AuthUser {
 // before attempting SMTP. Not an error state.
 export type EmailStatus = "sent" | "not_configured" | "smtp_error" | "disabled" | "no_email" | null;
 export interface TokenResponse {
-  access_token: string;
+  // Production-Ready Email Verification milestone (2026-10-28) -- null
+  // when a brand-new account still needs to verify its email: no
+  // session/token is issued until then (see auth_service.register_user).
+  // Callers must treat a null access_token as "registered, check your
+  // email," never as "logged in."
+  access_token: string | null;
   token_type: string;
   user: AuthUser;
   email_status: EmailStatus;
+}
+
+// Error payloads from this backend are either a plain string (most
+// ValueError-mapped failures) or a structured {message, code} object --
+// currently just EmailNotVerifiedError's 401 on /auth/login (see
+// app.api.auth) -- so the frontend can act on `code` (show a "Resend
+// verification email" action) without fragile string-matching against
+// the human-readable message.
+export interface ApiErrorDetail {
+  message: string;
+  code?: string;
+}
+
+export function extractErrorDetail(e: unknown, fallback = "Couldn't reach the backend."): ApiErrorDetail {
+  const detail = (e as { response?: { data?: { detail?: string | { message?: string; code?: string } } } })
+    ?.response?.data?.detail;
+  if (typeof detail === "string") return { message: detail };
+  if (detail && typeof detail === "object") {
+    return { message: detail.message ?? fallback, code: detail.code };
+  }
+  return { message: fallback };
 }
 
 export interface VerifyEmailResponse {
@@ -540,8 +566,8 @@ export async function registerAccount(
   fullName: string,
   // College-email requirement (2026-10-08) — required for every signup,
   // both account types; validated client-side (Register.tsx) and again
-  // server-side (schemas.auth.RegisterRequest.validate_college_email).
-  // Login is unaffected — still username + password only.
+  // server-side (schemas.auth.RegisterRequest). Login is unaffected —
+  // still username + password only.
   collegeEmail: string,
   password: string,
   confirmPassword: string,
@@ -556,7 +582,15 @@ export async function registerAccount(
   // comment on RegisterRequest.account_type — it only flags the new
   // account for Super Admin review (teacher_request_pending on the
   // response's `user`).
-  accountType: "student" | "teacher" = "student"
+  accountType: "student" | "teacher" = "student",
+  // Production-Ready Email Verification milestone (2026-10-28). Only
+  // meaningful when accountType === "student": "vit" (default) keeps the
+  // institutional-only requirement; "general" allows a personal Gmail
+  // address instead. A teacher sends this too (Register.tsx never shows
+  // the choice for teachers), but the backend always forces a teacher
+  // onto the institutional domain regardless of what's sent here — see
+  // schemas.auth.RegisterRequest.validate_email_domain.
+  studentCategory: "vit" | "general" = "vit"
 ): Promise<TokenResponse> {
   const { data } = await api.post<TokenResponse>("/auth/register", {
     username,
@@ -567,6 +601,7 @@ export async function registerAccount(
     birthday: birthday || null,
     timezone: timezone || null,
     account_type: accountType,
+    student_category: studentCategory,
   });
   return data;
 }

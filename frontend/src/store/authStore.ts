@@ -1,7 +1,14 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import { fetchCurrentUser, loginAccount, registerAccount, type AuthUser, type EmailStatus } from "../services/api";
+import {
+  extractErrorDetail,
+  fetchCurrentUser,
+  loginAccount,
+  registerAccount,
+  type AuthUser,
+  type EmailStatus,
+} from "../services/api";
 import { useBirthdayStore } from "./birthdayStore";
 import { useCommunityStore } from "./communityStore";
 import { useProgressStore } from "./progressStore";
@@ -10,6 +17,13 @@ interface AuthState {
   token: string | null;
   user: AuthUser | null;
   error: string | null;
+  // Production-Ready Email Verification milestone (2026-10-28). Set
+  // alongside `error` only for the one structured-detail case the
+  // backend sends (EmailNotVerifiedError on /auth/login, code
+  // "email_not_verified") — lets Login.tsx show a "Resend verification
+  // email" action without pattern-matching the message text. Always
+  // cleared together with `error`.
+  errorCode: string | null;
   loading: boolean;
   // False only for the brief window between app boot and initAuth()
   // resolving (see below). ProtectedRoute reads this — not just `token` —
@@ -36,8 +50,18 @@ interface AuthState {
     timezone?: string | null,
     // Student/Teacher self-serve signup follow-up; see registerAccount's
     // own comment in services/api.ts.
-    accountType?: "student" | "teacher"
-  ) => Promise<boolean>;
+    accountType?: "student" | "teacher",
+    // Production-Ready Email Verification milestone (2026-10-28); see
+    // registerAccount's own comment in services/api.ts.
+    studentCategory?: "vit" | "general"
+    // Production-Ready Email Verification milestone (2026-10-28).
+    // "authenticated": verified/ungated account, real session issued —
+    // Register.tsx should navigate into the app. "verify_pending": the
+    // account was created but needs to verify its email first — NO
+    // session was issued; Register.tsx must show the "check your inbox"
+    // screen, never navigate into the dashboard. false: registration
+    // itself failed; `error` explains why.
+  ) => Promise<"authenticated" | "verify_pending" | false>;
   login: (username: string, password: string, accountType?: "student" | "teacher") => Promise<boolean>;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -64,14 +88,46 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       user: null,
       error: null,
+      errorCode: null,
       loading: false,
       authChecked: false,
       lastEmailStatus: null,
 
-      register: async (username, fullName, collegeEmail, password, confirmPassword, birthday, timezone, accountType) => {
-        set({ loading: true, error: null });
+      register: async (
+        username,
+        fullName,
+        collegeEmail,
+        password,
+        confirmPassword,
+        birthday,
+        timezone,
+        accountType,
+        studentCategory
+      ) => {
+        set({ loading: true, error: null, errorCode: null });
         try {
-          const data = await registerAccount(username, fullName, collegeEmail, password, confirmPassword, birthday, timezone, accountType);
+          const data = await registerAccount(
+            username,
+            fullName,
+            collegeEmail,
+            password,
+            confirmPassword,
+            birthday,
+            timezone,
+            accountType,
+            studentCategory
+          );
+          // Production-Ready Email Verification milestone (2026-10-28).
+          // A null access_token means the backend deliberately issued NO
+          // session — the account still has to verify its email. Store
+          // the user (so Register.tsx can show/mask the address and the
+          // pending state) but leave `token` untouched: there is no
+          // session to set, and ProtectedRoute must keep treating this
+          // visitor as signed out until they actually verify and log in.
+          if (!data.access_token) {
+            set({ user: data.user, loading: false, lastEmailStatus: data.email_status });
+            return "verify_pending";
+          }
           set({ token: data.access_token, user: data.user, loading: false, lastEmailStatus: data.email_status });
           useProgressStore.getState().refresh();
           // Birthday Experience milestone, point 4 — loaded here (not just
@@ -79,16 +135,16 @@ export const useAuthStore = create<AuthState>()(
           // so "every login/session" genuinely covers BOTH roles. Harmless
           // if TopBar also triggers it moments later for a student.
           useBirthdayStore.getState().load();
-          return true;
+          return "authenticated";
         } catch (e) {
-          const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-          set({ error: detail ?? "Couldn't reach the backend.", loading: false });
+          const { message, code } = extractErrorDetail(e);
+          set({ error: message, errorCode: code ?? null, loading: false });
           return false;
         }
       },
 
       login: async (username, password, accountType) => {
-        set({ loading: true, error: null });
+        set({ loading: true, error: null, errorCode: null });
         try {
           const data = await loginAccount(username, password, accountType);
           set({ token: data.access_token, user: data.user, loading: false });
@@ -100,8 +156,15 @@ export const useAuthStore = create<AuthState>()(
           useBirthdayStore.getState().load();
           return true;
         } catch (e) {
-          const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-          set({ error: detail ?? "Couldn't reach the backend.", loading: false });
+          // Production-Ready Email Verification milestone (2026-10-28) --
+          // a blocked, unverified-email login comes back as a structured
+          // {message, code: "email_not_verified"} detail (see
+          // app.api.auth's EmailNotVerifiedError handling); every other
+          // login failure is still the plain string it always was.
+          // extractErrorDetail normalizes both, so Login.tsx can check
+          // `errorCode` without string-matching `error`.
+          const { message, code } = extractErrorDetail(e);
+          set({ error: message, errorCode: code ?? null, loading: false });
           return false;
         }
       },
@@ -120,7 +183,7 @@ export const useAuthStore = create<AuthState>()(
       // reactively off this same `token` transition (see TopBar.tsx's
       // effect), so it isn't duplicated here.
       logout: () => {
-        set({ token: null, user: null, error: null });
+        set({ token: null, user: null, error: null, errorCode: null });
         useProgressStore.getState().clear();
         useCommunityStore.getState().reset();
         useBirthdayStore.getState().reset();
@@ -177,7 +240,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      clearError: () => set({ error: null }),
+      clearError: () => set({ error: null, errorCode: null }),
     }),
     {
       name: "nlp-nexus-auth",

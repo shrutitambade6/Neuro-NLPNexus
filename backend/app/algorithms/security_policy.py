@@ -44,3 +44,11 @@ ACCOUNT_STATUS_LOGIN_MESSAGES = {
 # this gives the Super Admin Portal real "automatic session expiration",
 # not just the same 24h everyone else gets.
 SUPER_ADMIN_SESSION_LIFETIME_SECONDS = 60 * 60 * 2  # 2 hours
+
+# Production-Ready Email Verification milestone (2026-10-28). Minimum
+# time a user must wait between two resend-verification-email requests
+# for the same account, enforced via User.last_verification_sent_at.
+# Protects against someone spamming an inbox (their own or, more to the
+# point, someone else's, since resend-verification never requires auth)
+# with repeated sends, without needing an in-memory/Redis rate limiter.
+RESEND_VERIFICATION_COOLDOWN_SECONDS = 60

@@ -51,6 +51,40 @@ def _fresh_test_db():
 
 
 
+def verify_and_login(client: TestClient, username: str, password: str = "hunter22pass") -> str:
+    """Shared helper (Production-Ready Email Verification milestone,
+    2026-10-28): completes the real verification flow for an
+    already-registered, already-unverified account -- the same way a
+    user's email link would, a signed purpose=verify_email token built
+    exactly like test_email_verification_api.py's own pattern -- then
+    logs in and returns a real access token.
+
+    Dozens of test files across this suite have their own small
+    `_register_and_token`-shaped helper that used to read
+    `response.json()["access_token"]` straight off the register call.
+    That stopped working once register_user stopped issuing a token for
+    an unverified account (the real gate this milestone restores) --
+    each of those helpers now calls this function instead of bypassing
+    the gate, so every one of those ~90 tests still gets a REAL,
+    genuinely-verified, logged-in user, not a shortcut around the new
+    behavior they don't care about testing."""
+    from app.services import auth_service
+
+    db = TestSessionLocal()
+    try:
+        user = db.query(auth_service.User).filter(auth_service.User.username == username.strip()).first()
+        token = auth_service.create_access_token(
+            {"sub": str(user.id), "purpose": "verify_email"}, auth_service.JWT_SECRET, 3600
+        )
+    finally:
+        db.close()
+    verify_resp = client.get("/api/auth/verify-email", params={"token": token})
+    assert verify_resp.status_code == 200, verify_resp.text
+    login_resp = client.post("/api/auth/login", json={"username": username.strip(), "password": password})
+    assert login_resp.status_code == 200, login_resp.text
+    return login_resp.json()["access_token"]
+
+
 @pytest.fixture
 def auth_headers(_fresh_test_db):
     """A ready-to-use Authorization header for a fresh, unique test user.
@@ -81,5 +115,31 @@ def auth_headers(_fresh_test_db):
         },
     )
     assert r.status_code == 201, r.text
-    token = r.json()["access_token"]
+    token = r.json().get("access_token")
+    if not token:
+        # Production-Ready Email Verification milestone (2026-10-28) --
+        # registration no longer issues a session token for an account
+        # that still needs to verify its email (EMAIL_VERIFICATION_ENABLED
+        # defaults to "true", and nothing overrides that for this test
+        # run). This fixture is plumbing for ~100 tests across the suite
+        # that just need "a logged-in user" and have nothing to do with
+        # verification itself, so it completes the SAME real verification
+        # flow a user's email link would -- a signed purpose=verify_email
+        # token, exactly like test_email_verification_api.py's own
+        # pattern -- rather than bypassing the gate.
+        from app.services import auth_service
+
+        db = TestSessionLocal()
+        try:
+            user = db.query(auth_service.User).filter(auth_service.User.username == username).first()
+            verify_token = auth_service.create_access_token(
+                {"sub": str(user.id), "purpose": "verify_email"}, auth_service.JWT_SECRET, 3600
+            )
+        finally:
+            db.close()
+        verify_resp = client.get("/api/auth/verify-email", params={"token": verify_token})
+        assert verify_resp.status_code == 200, verify_resp.text
+        login_resp = client.post("/api/auth/login", json={"username": username, "password": "hunter22pass"})
+        assert login_resp.status_code == 200, login_resp.text
+        token = login_resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

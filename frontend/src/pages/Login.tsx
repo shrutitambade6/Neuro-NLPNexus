@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { AlertCircle, Eye, EyeOff, Loader2, LogIn } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Loader2, LogIn, MailQuestion } from "lucide-react";
 
 import { useAuthStore } from "../store/authStore";
 import FluidCursorBackground from "../components/FluidCursorBackground";
 import NexiMascot from "../components/nexi/NexiMascot";
+import { resendVerificationEmail } from "../services/api";
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login, loading, error, clearError } = useAuthStore();
+  const { login, loading, error, errorCode, clearError } = useAuthStore();
   // Username/Password Authentication milestone (2026-10-07) -- login is by
   // username + password now, no email anywhere on this page. See
   // student-teacher-username-auth.md.
@@ -22,6 +23,23 @@ export default function Login() {
   // or role="super_admin" account. Defaults to "student" since that's the
   // overwhelmingly common case, matching Register.tsx's own default.
   const [accountType, setAccountType] = useState<"student" | "teacher">("student");
+  // Production-Ready Email Verification milestone (2026-10-28). Mirrors
+  // VerifyEmail.tsx's own resend mini-form, shown inline only once login
+  // is blocked with errorCode === "email_not_verified" -- login only
+  // collects username+password, so there's no email on hand here to
+  // resend to without asking for it.
+  const [resendEmail, setResendEmail] = useState("");
+  const [resendState, setResendState] = useState<"idle" | "sending" | "done">("idle");
+  const [resendMessage, setResendMessage] = useState("");
+
+  // Fixes the cross-page error leak (this `error` field is shared with
+  // Register.tsx in the auth store, see authStore.ts): a failed signup
+  // attempt's error must never still be showing here if the visitor then
+  // navigates to this page without having submitted this form yet.
+  useEffect(() => {
+    clearError();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,6 +50,19 @@ export default function Login() {
     // this only changes where sign-in itself drops them off.
     const ok = await login(username, password, accountType);
     if (ok) navigate("/dashboard");
+  };
+
+  const handleResend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResendState("sending");
+    try {
+      const res = await resendVerificationEmail(resendEmail);
+      setResendMessage(res.message);
+    } catch {
+      setResendMessage("Couldn't reach the backend — please try again in a moment.");
+    } finally {
+      setResendState("done");
+    }
   };
 
   return (
@@ -86,15 +117,18 @@ export default function Login() {
           />
         </div>
         <div>
-          {/* Username/Password Authentication milestone (2026-10-07) --
-              the "Forgot password?" link is removed from this page: a
-              username-only account has no email to send a reset link to,
-              so there is no self-service recovery path anymore. The
-              backend's email-based forgot/reset-password endpoints still
-              exist and still work for any account that does have an email
-              on file; a locked-out username-only account now goes through
-              a Super Admin instead (Account Actions panel). */}
-          <label className="text-xs text-nexus-muted">Password</label>
+          <div className="flex items-baseline justify-between">
+            <label className="text-xs text-nexus-muted">Password</label>
+            {/* Production-Ready Email Verification milestone (2026-10-28)
+                -- restored now that email is mandatory + verified again
+                for every account (see schemas.auth.RegisterRequest). The
+                prior removal of this link was because a username-only
+                account had no email to send a reset link to; that no
+                longer holds. */}
+            <Link to="/forgot-password" className="text-[11px] text-nexus-accent hover:text-nexus-data">
+              Forgot password?
+            </Link>
+          </div>
           <div className="relative mt-1">
             <input
               type={showPassword ? "text" : "password"}
@@ -115,8 +149,40 @@ export default function Login() {
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 rounded-lg border border-nexus-bad/40 bg-nexus-bad/10 px-3 py-2 text-xs text-nexus-bad">
-            <AlertCircle size={14} className="shrink-0" /> {error}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 rounded-lg border border-nexus-bad/40 bg-nexus-bad/10 px-3 py-2 text-xs text-nexus-bad">
+              <AlertCircle size={14} className="shrink-0" /> {error}
+            </div>
+            {/* Production-Ready Email Verification milestone (2026-10-28).
+                Shown only for the one structured-detail case
+                (code === "email_not_verified") -- login only collects a
+                username, so this asks for the email to resend to, the
+                same inline pattern as VerifyEmail.tsx's own error state. */}
+            {errorCode === "email_not_verified" && (
+              <div className="rounded-lg border border-nexus-border bg-nexus-bg px-3 py-2 space-y-2">
+                <p className="text-xs text-nexus-muted flex items-center gap-1.5">
+                  <MailQuestion size={13} /> Need a new link? Enter your email to resend it.
+                </p>
+                <form onSubmit={handleResend} className="flex gap-2">
+                  <input
+                    type="email"
+                    required
+                    value={resendEmail}
+                    onChange={(ev) => setResendEmail(ev.target.value)}
+                    placeholder="you@example.com"
+                    className="flex-1 rounded-lg bg-nexus-surface border border-nexus-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nexus-accent/50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={resendState === "sending"}
+                    className="rounded-lg bg-nexus-accent px-3 py-2 text-xs font-medium text-white hover:bg-nexus-accent/90 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {resendState === "sending" ? <Loader2 size={13} className="animate-spin" /> : "Resend"}
+                  </button>
+                </form>
+                {resendMessage && <p className="text-xs text-nexus-muted">{resendMessage}</p>}
+              </div>
+            )}
           </div>
         )}
 

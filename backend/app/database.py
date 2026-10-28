@@ -75,6 +75,9 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # orm_models.User.full_name's own comment. Purely additive (nullable,
     # no default needed), unlike the email change below.
     ("users", "full_name", "VARCHAR(120)"),
+    # Production-Ready Email Verification milestone (2026-10-28) -- see
+    # orm_models.User.last_verification_sent_at's own comment.
+    ("users", "last_verification_sent_at", "DATETIME"),
 ]
 
 
