@@ -176,7 +176,7 @@ def test_resend_verification_for_already_verified_account():
 
 
 def test_resend_verification_reports_not_configured_when_no_smtp(monkeypatch):
-    for key in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM_EMAIL"):
+    for key in ("SENDGRID_API_KEY", "SMTP_FROM_EMAIL"):
         monkeypatch.delenv(key, raising=False)
     _create_user_with_email("resendme", "resendme@example.com", is_verified=False)
     response = client.post("/api/auth/resend-verification", json={"email": "resendme@example.com"})

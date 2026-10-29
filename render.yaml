@@ -37,13 +37,20 @@ services:
       # Production-Ready Email Verification milestone (2026-10-28): the
       # real verification GATE in the code is restored and working (see
       # auth_service.register_user/login_user) and tested locally end to
-      # end. This stays "false" here ONLY because no real SMTP
+      # end. This stays "false" here ONLY because no real email-sending
       # credentials exist for this deploy yet -- flipping it to "true"
-      # without also filling in the SMTP_* values below would lock every
-      # new signup out with no way to ever receive the link. Once real
-      # SMTP_* credentials are set (see backend/.env.example and this
-      # project's deployment notes for exact setup steps), change this to
+      # without also filling in SENDGRID_API_KEY/SMTP_FROM_EMAIL below
+      # would lock every new signup out with no way to ever receive the
+      # link. Once SendGrid is actually configured and confirmed
+      # delivering (see this project's deployment notes), change this to
       # "true" to turn the real gate on in production too.
+      #
+      # NOTE: this value is only read by the SERVICE CODE's own default
+      # (os.getenv(..., "true")) when the var is truly unset -- Render's
+      # Blueprint sync does not overwrite a var that already exists in
+      # the live dashboard from an earlier deploy. If this key is
+      # missing from the dashboard's Environment tab, add it there
+      # explicitly rather than assuming this file's value is in effect.
       - key: EMAIL_VERIFICATION_ENABLED
         value: "false"
       # Where the "Verify Email / Activate Account" link in the welcome
@@ -60,25 +67,23 @@ services:
       # — falls back to a generic "your platform administrator" if unset.
       - key: SUPPORT_EMAIL
         sync: false
-      # Real SMTP credentials for actually sending verification/welcome
-      # emails. sync: false on every one of these means Render will ask
-      # for a value in the dashboard rather than storing it in this
-      # committed file — never put a real credential directly in
-      # render.yaml. Leave all of these unset to keep today's "not
-      # configured" demo behavior; see this project's deployment notes
-      # for exact provider setup steps (Gmail App Password, or any
-      # SMTP-compatible transactional provider).
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USERNAME
-        sync: false
-      - key: SMTP_PASSWORD
+      # Real email delivery via SendGrid's HTTP API (see
+      # backend/app/services/email_service.py). Render's free web
+      # service tier blocks outbound traffic to SMTP ports 25/465/587
+      # (see Render's own changelog: "free-web-services-will-no-longer
+      # -allow-outbound-traffic-to-smtp-ports"), so this project sends
+      # over plain HTTPS via SendGrid instead of smtplib. sync: false
+      # means Render will ask for a value in the dashboard rather than
+      # storing it in this committed file — never put a real credential
+      # directly in render.yaml. SENDGRID_API_KEY is a Mail Send-scoped
+      # API key from a verified Single Sender (no custom domain
+      # required). SMTP_FROM_EMAIL/SMTP_FROM_NAME are kept from this
+      # project's original SMTP design as the "from" identity — still
+      # just "the address/name mail appears to come from," even though
+      # sending no longer goes over SMTP.
+      - key: SENDGRID_API_KEY
         sync: false
       - key: SMTP_FROM_EMAIL
         sync: false
       - key: SMTP_FROM_NAME
         value: "NeuroNLP Nexus"
-      - key: SMTP_USE_TLS
-        value: "true"

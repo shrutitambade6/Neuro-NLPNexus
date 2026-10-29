@@ -1,54 +1,61 @@
 """
-Real SMTP email delivery — no third-party email API SDK added, since
-Python's standard-library `smtplib` can talk to any SMTP provider (Gmail
-with an app password, SendGrid/Mailgun/Resend/SES's SMTP relay, a
-company mail server, etc.) without a new dependency. All credentials are
-read from environment variables and never touch the frontend or any API
-response body.
+Real email delivery via SendGrid's HTTP API (api.sendgrid.com/v3/mail/send)
+using the already-present `httpx` client — no vendor SDK added, same
+"no new third-party SDK" spirit as this module's original smtplib design.
 
-Honesty rule this module follows (matching the rest of this project):
-if SMTP isn't configured, or the send genuinely fails, this returns a
-clear `EmailSendResult(sent=False, reason=...)` — it never pretends an
+Why HTTP instead of SMTP (2026-10-29): this app's primary deployment is
+Render's free web service tier, which blocks all outbound traffic to SMTP
+ports 25/465/587 as of September 2025 (see Render's own changelog:
+"free-web-services-will-no-longer-allow-outbound-traffic-to-smtp-ports").
+smtplib-based sending therefore failed there with a hard
+"[Errno 101] Network is unreachable" regardless of how correct the SMTP
+credentials were -- it was never a credentials problem. SendGrid's API is
+plain HTTPS (port 443), which Render's free tier does not block.
+
+Credentials: SENDGRID_API_KEY (a Mail Send-scoped API key from a verified
+Single Sender -- no custom domain required; see SendGrid's Single Sender
+Verification). The "from" identity keeps the SMTP_FROM_EMAIL/SMTP_FROM_NAME
+env var names from this project's original SMTP design (already configured
+on this deployment) even though sending no longer goes over SMTP -- it's
+still just "the address/name mail appears to come from."
+
+Honesty rule this module follows (matching the rest of this project): if
+SendGrid isn't configured, or the send genuinely fails, this returns a
+clear `EmailSendResult(sent=False, reason=...)` -- it never pretends an
 email went out. Callers (see auth_service.register_user) must not let a
 failed or skipped send break account creation; email delivery is
 best-effort and reported honestly, not silently swallowed.
 """
 import logging
 import os
-import smtplib
 from dataclasses import dataclass
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+
+import httpx
 
 logger = logging.getLogger("nlp_nexus.email")
 
-SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip() or SMTP_USERNAME
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "NeuroNLP Nexus").strip()
-SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false"
-SMTP_TIMEOUT_SECONDS = 10
+SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
+SENDGRID_TIMEOUT_SECONDS = 10
 
 
 def email_is_configured() -> bool:
-    """True only when enough real SMTP credentials are present to attempt
-    a send. Read fresh from the environment each call so tests can
+    """True only when enough real SendGrid config is present to attempt a
+    send. Read fresh from the environment each call so tests can
     monkeypatch os.environ without reimporting the module."""
-    host = os.getenv("SMTP_HOST", "").strip()
-    username = os.getenv("SMTP_USERNAME", "").strip()
-    password = os.getenv("SMTP_PASSWORD", "")
-    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip() or username
-    return bool(host and username and password and from_email)
+    api_key = os.getenv("SENDGRID_API_KEY", "").strip()
+    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    return bool(api_key and from_email)
 
 
 @dataclass
 class EmailSendResult:
     sent: bool
     # Present only when sent=False — an honest, specific reason rather than
-    # a generic failure flag: "not_configured" (no SMTP env vars set) or
-    # "smtp_error" (a real send attempt was made and failed).
+    # a generic failure flag: "not_configured" (no SendGrid env vars set)
+    # or "smtp_error" (a real send attempt was made and failed). Kept as
+    # "smtp_error" rather than renamed, since every caller/test already
+    # matches on this exact string and it still means the same thing:
+    # "a real send was attempted and the provider rejected or failed it."
     reason: str | None = None
     detail: str | None = None
 
@@ -56,36 +63,51 @@ class EmailSendResult:
 def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> EmailSendResult:
     if not email_is_configured():
         logger.warning(
-            "Email to %s ('%s') was not sent: SMTP is not configured. Set SMTP_HOST, "
-            "SMTP_USERNAME, SMTP_PASSWORD, and SMTP_FROM_EMAIL to enable real delivery.",
+            "Email to %s ('%s') was not sent: SendGrid is not configured. Set SENDGRID_API_KEY "
+            "and SMTP_FROM_EMAIL to enable real delivery.",
             to_email,
             subject,
         )
         return EmailSendResult(sent=False, reason="not_configured")
 
-    host = os.getenv("SMTP_HOST", "").strip()
-    port = int(os.getenv("SMTP_PORT", "587") or "587")
-    username = os.getenv("SMTP_USERNAME", "").strip()
-    password = os.getenv("SMTP_PASSWORD", "")
-    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip() or username
+    api_key = os.getenv("SENDGRID_API_KEY", "").strip()
+    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
     from_name = os.getenv("SMTP_FROM_NAME", "NeuroNLP Nexus").strip()
-    use_tls = os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false"
 
-    message = MIMEMultipart("alternative")
-    message["Subject"] = subject
-    message["From"] = f"{from_name} <{from_email}>"
-    message["To"] = to_email
-    message.attach(MIMEText(text_body, "plain"))
-    message.attach(MIMEText(html_body, "html"))
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": from_email, "name": from_name},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": text_body},
+            {"type": "text/html", "value": html_body},
+        ],
+    }
 
     try:
-        with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS) as server:
-            if use_tls:
-                server.starttls()
-            server.login(username, password)
-            server.sendmail(from_email, [to_email], message.as_string())
-        logger.info("Sent email to %s ('%s')", to_email, subject)
-        return EmailSendResult(sent=True)
-    except Exception as exc:  # noqa: BLE001 — any SMTP/network failure must degrade gracefully
+        response = httpx.post(
+            SENDGRID_API_URL,
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=SENDGRID_TIMEOUT_SECONDS,
+        )
+        # SendGrid returns 202 Accepted with an empty body on success —
+        # anything else is a real failure (bad/unverified sender, invalid
+        # key, rate limit, malformed recipient, ...).
+        if response.status_code == 202:
+            logger.info("Sent email to %s ('%s') via SendGrid", to_email, subject)
+            return EmailSendResult(sent=True)
+        # Never log the API key; the response body (SendGrid's own error
+        # detail) is safe and useful for diagnosing a misconfigured sender.
+        detail = response.text[:500]
+        logger.error(
+            "Failed to send email to %s ('%s'): SendGrid returned %s: %s",
+            to_email,
+            subject,
+            response.status_code,
+            detail,
+        )
+        return EmailSendResult(sent=False, reason="smtp_error", detail=f"HTTP {response.status_code}: {detail}")
+    except Exception as exc:  # noqa: BLE001 — any network/HTTP failure must degrade gracefully
         logger.error("Failed to send email to %s ('%s'): %s", to_email, subject, exc)
         return EmailSendResult(sent=False, reason="smtp_error", detail=str(exc))
